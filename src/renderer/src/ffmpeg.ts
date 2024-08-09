@@ -6,10 +6,10 @@ import minBy from 'lodash/minBy';
 import invariant from 'tiny-invariant';
 
 import { pcmAudioCodecs, getMapStreamsArgs, isMov, LiteFFprobeStream } from './util/streams';
-import { getSuffixedOutPath, isExecaFailure } from './util';
+import { getSuffixedOutPath, isExecaError } from './util';
 import { isDurationValid } from './segments';
 import { FFprobeChapter, FFprobeFormat, FFprobeProbeResult, FFprobeStream } from '../../../ffprobe';
-import { parseSrt } from './edlFormats';
+import { parseSrt, parseSrtToSegments } from './edlFormats';
 
 const FileType = window.require('file-type');
 const { pathExists } = window.require('fs-extra');
@@ -350,8 +350,7 @@ export async function readFileMeta(filePath: string) {
     invariant(format != null);
     return { format, streams, chapters };
   } catch (err) {
-    // Windows will throw error with code ENOENT if format detection fails.
-    if (isExecaFailure(err)) {
+    if (isExecaError(err)) {
       throw Object.assign(new Error(`Unsupported file: ${err.message}`), { code: 'LLC_FFPROBE_UNSUPPORTED_FILE' });
     }
     throw err;
@@ -506,7 +505,7 @@ async function renderThumbnail(filePath: string, timestamp: number) {
   return URL.createObjectURL(blob);
 }
 
-export async function extractSubtitleTrackToSegments(filePath: string, streamId: number) {
+export async function extractSubtitleTrack(filePath: string, streamId: number) {
   const args = [
     '-hide_banner',
     '-i', filePath,
@@ -516,7 +515,17 @@ export async function extractSubtitleTrackToSegments(filePath: string, streamId:
   ];
 
   const { stdout } = await runFfmpeg(args);
-  return parseSrt(stdout.toString('utf8'));
+  return stdout.toString('utf8');
+}
+
+export async function extractSubtitleTrackToSegments(filePath: string, streamId: number) {
+  const srt = await extractSubtitleTrack(filePath, streamId);
+  return parseSrtToSegments(srt);
+}
+
+export async function extractSrtGpsTrack(filePath: string, streamId: number) {
+  const srt = await extractSubtitleTrack(filePath, streamId);
+  return parseSrt(srt);
 }
 
 export async function extractSubtitleTrackVtt(filePath: string, streamId: number) {
@@ -642,7 +651,7 @@ function parseTimecode(str: string, frameRate?: number | undefined) {
 
 export function getTimecodeFromStreams(streams: FFprobeStream[]) {
   console.log('Trying to load timecode');
-  let foundTimecode;
+  let foundTimecode: number | undefined;
   streams.find((stream) => {
     try {
       if (stream.tags && stream.tags['timecode']) {
